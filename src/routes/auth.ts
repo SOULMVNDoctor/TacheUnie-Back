@@ -6,6 +6,7 @@ import { auth } from "../middleware/auth";
 
 const router = Router();
 
+
 // INSCRIPTION
 router.post("/register", async (req, res) => {
   const { fullname, password } = req.body;
@@ -16,6 +17,8 @@ router.post("/register", async (req, res) => {
   const hashed = await bcrypt.hash(password, 10);
   const user = await User.create({ fullname, password: hashed });
 
+  const secret = process.env.JWT_SECRET || "dev_secret";
+  const token = jwt.sign({ id: user._id }, secret, { expiresIn: "7d" });
 
   const safeUser = {
     _id: user._id,
@@ -23,8 +26,9 @@ router.post("/register", async (req, res) => {
     createdAt: user.createdAt
   };
 
-  res.json({ message: "Utilisateur créé", user: safeUser });
+  res.json({ message: "Utilisateur créé", user: safeUser, token });
 });
+
 
 // LOGIN
 router.post("/login", async (req, res) => {
