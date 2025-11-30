@@ -3,10 +3,8 @@ import jwt from "jsonwebtoken";
 
 type ReqWithUser = Request & { user?: { id: string } };
 
-/**
- * Auth middleware: attend un header Authorization: "Bearer <token>"
- * Normalise req.user = { id: string }.
- */
+
+
 export const auth = (req: ReqWithUser, res: Response, next: NextFunction) => {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.split(" ")[1] : header;

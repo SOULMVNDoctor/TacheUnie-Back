@@ -8,5 +8,5 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.models.User || mongoose.model("User", userSchema);
 
-// export with an explicit Model type to avoid TypeScript union-callable errors
+
 export default User as mongoose.Model<any>;

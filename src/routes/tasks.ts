@@ -5,155 +5,232 @@ import Group from "../models/Group";
 import { auth } from "../middleware/auth";
 
 const router = Router();
-
-// helper : test valid objectId
 const isValidId = (id: string) => mongoose.isValidObjectId(id);
 
-/**
- * Return true if the provided date is NOT in the past (compares calendar day).
- * Example: if today is 2025-11-27, a deadline of 2025-11-26 => invalid.
- */
+
 function isDateNotPast(value: Date | string) {
   const d = new Date(value);
   if (isNaN(d.getTime())) return false;
-  // normalize to start of day
   d.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return d >= today;
 }
 
-// create task (must be member of group)
+
+function computeStatus(task: any) {
+  const now = new Date();
+  const today = new Date();
+  today.setHours(0,0,0,0);
+
+  const start = task.startDate ? new Date(task.startDate) : null;
+  const end = task.endDate ? new Date(task.endDate) : null;
+
+  if (start) start.setHours(0,0,0,0);
+  if (end) end.setHours(0,0,0,0);
+
+
+  if (!start && !end) return task.status || "pending";
+
+
+  if (start && start > today) return "pending";
+
+
+  if (start && end) {
+    if (today < start) return "pending";
+    if (today >= start && today < end) return "in_progress";
+    return "done";
+  }
+
+
+  if (start && !end) {
+    if (today < start) return "pending";
+    return "in_progress";
+  }
+
+
+  if (!start && end) {
+    if (today < end) return "in_progress";
+    return "done";
+  }
+
+  return task.status || "pending";
+}
+
+
 router.post("/", auth, async (req: any, res) => {
   try {
     const userId = req.user.id;
-    const { title, description, deadline, groupId } = req.body;
-    if (!title || !groupId) return res.status(400).json({ message: "title & groupId required" });
-    if (!isValidId(groupId)) return res.status(400).json({ message: "Invalid groupId" });
+    const { title, description, startDate, endDate, groupId } = req.body;
 
-    const group = await (Group as any).findById(groupId);
-    if (!group) return res.status(404).json({ message: "Group not found" });
+    if (!title)
+      return res.status(400).json({ message: "title required" });
 
-    // membership check
-    if (!group.members.map(String).includes(String(userId))) {
-      return res.status(403).json({ message: "You are not a member of this group" });
+    if (groupId) {
+      if (!isValidId(groupId))
+        return res.status(400).json({ message: "Invalid groupId" });
+
+      const group = await Group.findById(groupId);
+      if (!group)
+        return res.status(404).json({ message: "Group not found" });
+
+      if (!group.members.map(String).includes(String(userId)))
+        return res.status(403).json({ message: "You are not a member of this group" });
     }
 
-    // validate deadline if provided
-    let parsedDeadline: Date | undefined = undefined;
-    if (deadline) {
-      if (!isDateNotPast(deadline)) return res.status(400).json({ message: "La deadline ne peut pas être dans le passé" });
-      parsedDeadline = new Date(deadline);
+
+    let sDate: Date | undefined = undefined;
+    let eDate: Date | undefined = undefined;
+
+    if (startDate) {
+      if (!isDateNotPast(startDate))
+        return res.status(400).json({ message: "startDate cannot be in the past" });
+      sDate = new Date(startDate);
     }
 
-    const task = await (Task as any).create({
+    if (endDate) {
+      eDate = new Date(endDate);
+      if (sDate && eDate < sDate)
+        return res.status(400).json({ message: "endDate cannot be before startDate" });
+    }
+
+    const task = await Task.create({
       title,
-      description: description ?? "",
-      deadline: parsedDeadline,
-      groupId,
-      createdBy: userId
+      description,
+      startDate: sDate,
+      endDate: eDate,
+      groupId: groupId || null,
+      createdBy: userId,
     });
 
-    res.status(201).json(task);
+    const computed = computeStatus(task);
+    res.status(201).json({ ...task.toObject(), computedStatus: computed });
+
   } catch (err) {
+    console.error("CREATE TASK ERROR:", err);
     res.status(500).json({ message: "Server error", err });
   }
 });
 
-// list tasks (optionally filter by group)
+
 router.get("/", auth, async (req: any, res) => {
   try {
-    const { groupId } = req.query;
-    const q: any = {};
-    if (groupId && String(groupId) !== "undefined") q.groupId = groupId;
-    const tasks = await (Task as any).find(q).sort({ createdAt: -1 }).lean();
-    res.json(tasks);
+    const userId = req.user.id;
+
+
+    const groups = await Group.find({ members: userId }, "_id");
+
+    const groupIds = groups.map((g) => g._id);
+
+    const tasks = await Task.find({
+      $or: [
+        { createdBy: userId },          
+        { groupId: { $in: groupIds } },
+      ]
+    })
+      .populate("createdBy", "fullname")
+      .lean();
+
+    const final = tasks.map((t) => ({
+      ...t,
+      computedStatus: computeStatus(t),
+    }));
+
+    res.json(final);
   } catch (err) {
     res.status(500).json({ message: "Server error", err });
   }
 });
 
-// tasks by group
-router.get("/group/:id", auth, async (req: any, res) => {
-  try {
-    const groupId = req.params.id;
-    if (!isValidId(groupId)) return res.status(400).json({ message: "Invalid id" });
 
-    // ensure requester is member
-    const group = await (Group as any).findById(groupId);
-    if (!group) return res.status(404).json({ message: "Group not found" });
-    if (!group.members.map(String).includes(String(req.user.id))) return res.status(403).json({ message: "Access denied" });
-
-    const tasks = await (Task as any).find({ groupId }).sort({ createdAt: -1 }).lean();
-    res.json(tasks);
-  } catch (err) {
-    res.status(500).json({ message: "Server error", err });
-  }
-});
-
-// update task (creator or group owner)
 router.put("/:id", auth, async (req: any, res) => {
   try {
-    const id = req.params.id;
-    if (!isValidId(id)) return res.status(400).json({ message: "Invalid id" });
+    const taskId = req.params.id;
+    const userId = req.user.id;
 
-    const task = await (Task as any).findById(id);
-    if (!task) return res.status(404).json({ message: "Task not found" });
+    if (!isValidId(taskId))
+      return res.status(400).json({ message: "Invalid id" });
 
-    const group = await (Group as any).findById(task.groupId);
-    const isOwner = group && String(group.owner) === String(req.user.id);
-    const isCreator = String(task.createdBy) === String(req.user.id);
+    const task: any = await Task.findById(taskId);
+    if (!task)
+      return res.status(404).json({ message: "Task not found" });
 
-    if (!isOwner && !isCreator) return res.status(403).json({ message: "Access denied" });
 
-    const { title, description, status, deadline } = req.body;
+    if (!task.groupId && String(task.createdBy) !== String(userId))
+      return res.status(403).json({ message: "Forbidden" });
 
-    if (title !== undefined) task.title = title;
-    if (description !== undefined) task.description = description;
-    if (status !== undefined) task.status = status;
 
-    if (deadline !== undefined) {
-      if (deadline === null || deadline === "") {
-        task.deadline = undefined;
-      } else {
-        if (!isDateNotPast(deadline)) return res.status(400).json({ message: "La deadline ne peut pas être dans le passé" });
-        task.deadline = new Date(deadline);
-      }
+    if (task.groupId) {
+      const group = await Group.findById(task.groupId);
+      if (!group)
+        return res.status(404).json({ message: "Group not found" });
+
+      if (!group.members.map(String).includes(String(userId)))
+        return res.status(403).json({ message: "Not allowed" });
     }
 
+    const { title, description, startDate, endDate, status } = req.body;
+
+    if (title) task.title = title;
+    if (description) task.description = description;
+
+    if (startDate) {
+      if (!isDateNotPast(startDate))
+        return res.status(400).json({ message: "startDate cannot be in the past" });
+      task.startDate = new Date(startDate);
+    }
+
+    if (endDate) {
+      const eDate = new Date(endDate);
+      if (task.startDate && eDate < task.startDate)
+        return res.status(400).json({ message: "endDate cannot be before startDate" });
+      task.endDate = eDate;
+    }
+
+    if (status) task.status = status;
+
     await task.save();
-    res.json(task);
+    const computed = computeStatus(task);
+    res.json({ ...task.toObject(), computedStatus: computed });
+
   } catch (err) {
     res.status(500).json({ message: "Server error", err });
   }
 });
 
-// delete task (creator or group owner)
-// delete task (robust)
+
 router.delete("/:id", auth, async (req: any, res) => {
   try {
     const id = req.params.id;
-    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "Invalid id" });
+    const userId = req.user.id;
 
-    const task = await Task.findById(id);
-    if (!task) return res.status(404).json({ message: "Task not found" });
+    if (!isValidId(id))
+      return res.status(400).json({ message: "Invalid id" });
 
-    const group = await Group.findById(task.groupId);
-    if (!group) return res.status(404).json({ message: "Group for this task not found" });
+    const task: any = await Task.findById(id);
+    if (!task)
+      return res.status(404).json({ message: "Task not found" });
 
-    const isOwner = group && String(group.owner) === String(req.user.id);
-    const isCreator = String(task.createdBy) === String(req.user.id);
 
-    if (!isOwner && !isCreator) return res.status(403).json({ message: "Access denied" });
+    if (!task.groupId && String(task.createdBy) !== String(userId))
+      return res.status(403).json({ message: "Forbidden" });
 
-    // use findByIdAndDelete for clarity
-    await Task.findByIdAndDelete(id);
-    return res.json({ message: "Task deleted" });
+
+    if (task.groupId) {
+      const group = await Group.findById(task.groupId);
+      if (!group)
+        return res.status(404).json({ message: "Group not found" });
+
+      if (!group.members.map(String).includes(String(userId)))
+        return res.status(403).json({ message: "Not allowed" });
+    }
+
+    await task.deleteOne();
+
+    res.json({ message: "Task deleted" });
   } catch (err) {
-    console.error("DELETE /tasks/:id error:", err);
-    return res.status(500).json({ message: "Server error", error: (err as any).message || err });
+    res.status(500).json({ message: "Server error", err });
   }
 });
-
 
 export default router;

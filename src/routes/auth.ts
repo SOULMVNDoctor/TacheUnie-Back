@@ -16,7 +16,7 @@ router.post("/register", async (req, res) => {
   const hashed = await bcrypt.hash(password, 10);
   const user = await User.create({ fullname, password: hashed });
 
-  // ne renvoie pas le mot de passe côté client
+
   const safeUser = {
     _id: user._id,
     fullname: user.fullname,

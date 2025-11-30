@@ -1,4 +1,3 @@
-// src/config/db.ts
 import mongoose from "mongoose";
 
 export async function connectDB() {
@@ -8,7 +7,7 @@ export async function connectDB() {
     return;
   }
 
-  // options minimales; Mongoose 9+ n'a pas besoin de useNewUrlParser/UnifiedTopology explicitement
+
   const baseOpts: mongoose.ConnectOptions = {
     serverSelectionTimeoutMS: 5000,
   };
@@ -20,7 +19,6 @@ export async function connectDB() {
   } catch (err: any) {
     console.error("Erreur MongoDB ❌", err?.message || err);
 
-    // si erreur TLS / certificat, on essaye une connexion de secours (dev only)
     const msg = String(err?.message || "").toLowerCase();
     const looksLikeTLS = msg.includes("certificate") || msg.includes("tls") || msg.includes("checkserveridentity") || msg.includes("subject");
 
@@ -40,8 +38,8 @@ export async function connectDB() {
       }
     }
 
-    // si on arrive là, on arrête l'app (optionnel)
+
     console.error("Impossible de se connecter à MongoDB — vérifie MONGODB_URI, le mot de passe (encodage), et l'accès réseau (IP whitelist).");
-    // process.exit(1); // décommente si tu veux que le serveur s'arrête quand DB indispo
+
   }
 }
